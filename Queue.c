@@ -66,64 +66,57 @@ void removeFromQueue(Queue* q, node* nodeToDelete)
 {
     if(q == NULL || nodeToDelete == NULL)
         return;
-    if(nodeToDelete->previous == NULL && nodeToDelete->next == NULL)
+
+    int is_first = 0;
+    int is_last = 0;
+    if(nodeToDelete->previous == NULL)
+        is_last = 1;
+    if(nodeToDelete->next == NULL)
+        is_first = 1;
+
+    if(!is_first && !is_last) // not last and not first
     {
-        q->tail = NULL;
-        q->head = NULL;
+        nodeToDelete->next->previous=nodeToDelete->previous;
+        nodeToDelete->previous->next=nodeToDelete->next;
     }
-    else if(nodeToDelete->previous == NULL)
+    else if(!is_last) // first and not last
     {
-        nodeToDelete->previous->next = NULL;
+        nodeToDelete->previous->next=NULL;
         q->head = nodeToDelete->previous;
+
     }
-    else if(nodeToDelete->next == NULL)
+    else if(!is_first) // last and not first
     {
-        nodeToDelete->next->previous = NULL;
+        nodeToDelete->next->previous=NULL;
         q->tail = nodeToDelete->next;
     }
-    else
+    else // first and last
     {
-        nodeToDelete->previous->next = nodeToDelete->next;
-        nodeToDelete->next->previous = nodeToDelete->previous;
+        q->tail=NULL;
+        q->head=NULL;
     }
     free(nodeToDelete);
     q->size--;
 }
 
-void removeByIndex(Queue* q, int index)
-{
-    if(q == NULL || index > q->size || index < 0)
-        return;
-    node* current = q->tail;
-    for(int i = 0; i < q->size; i++)
-    {
-        if(i == index)
-        {
-            Close(current->data->confd);
-            free(current->data);
-            removeFromQueue(q,current);
-            return;
-        }
-        current = current->next;
-    }
-}
-
-void removeIndices(Queue* q, int* indicesToDelete)
+void removeByIndex(Queue* q, int index_to_remove)
 {
     if(q == NULL)
         return;
-    int currentIndex = q->size - 1;
-    node* current = q->head;
-    while(current != NULL)
+    node* node_to_remove = q->tail;
+    int current_index = 0;
+
+    while(current_index <= index_to_remove && node_to_remove != NULL)
     {
-        if(indicesToDelete[currentIndex] == 1)
+        if(current_index == index_to_remove)
         {
-            Close(current->data->confd);
-            free(current->data);
-            removeFromQueue(q, current);
+            Close(node_to_remove->data->confd);
+            free(node_to_remove->data);
+            removeFromQueue(q, node_to_remove);
+            return;
         }
-        currentIndex--;
-        current = current->previous;
+        node_to_remove = node_to_remove->next;
+        current_index++;
     }
 }
 

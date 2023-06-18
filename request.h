@@ -1,16 +1,17 @@
 #ifndef __REQUEST_H__
 
-struct Stats
+struct stats
 {
-    struct timeval arrivalTime;
-    struct timeval dispachInterval;
-    int workingThreadsStaticCount;
-    int workingThreadsDynamicCount;
-    int workingThreadId;
-    int requestCount;
-};
-typedef struct Stats* Stats;
+    struct timeval arrival_time;
+    struct timeval dispatch_interval;
+    int handler_thread_id;
+    int handler_thread_req_count;
+    int handler_thread_static_req_count;
+    int handler_thread_dynamic_req_count;
 
-void requestHandle(int fd, Stats st);
+};
+typedef struct stats *Stats;
+
+void requestHandle(int fd,Stats stats);
 
 #endif

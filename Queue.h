@@ -1,9 +1,6 @@
-//
-// Created by zaher.amir on 14/06/2023.
-//
+#ifndef Queue_H
+#define Queue_H
 
-#ifndef UNTITLED1_QUEUE_H
-#define UNTITLED1_QUEUE_H
 #include "segel.h"
 
 struct Request
@@ -43,6 +40,4 @@ void removeIndices(Queue* q, int* indicesToDelete);
 void destroy(Queue* q);
 void destroyAndCloseDFds(Queue* q);
 
-Request* initRequest(int conFd, struct timeval arrivalTime);
-
-#endif //UNTITLED1_QUEUE_H
+#endif //Queue_H
