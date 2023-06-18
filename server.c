@@ -58,8 +58,8 @@ void* workerFunc(void* arg) {
 
         gettimeofday(&picked,NULL);
         timersub(&picked, &request_to_handle->arrive, &request_to_handle->dispatch);
-        stats->dispatch_interval=request_to_handle->dispatch;
-        stats->arrival_time=request_to_handle->arrive;
+        stats->dispatch_interval = request_to_handle->dispatch;
+        stats->arrival_time = request_to_handle->arrive;
 
 
         node* req_Node = addToQueue(q_handling_req, request_to_handle);

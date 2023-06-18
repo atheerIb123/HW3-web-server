@@ -143,12 +143,3 @@ void queueDestroyAndClose(Queue* q)
     }
     free(q);
 }
-
-Request* initRequest(int conFd, struct timeval arrivalTime)
-{
-    Request* newRequest = (Request*)malloc(sizeof(Request));
-    newRequest->confd = conFd;
-    newRequest->arrive= arrivalTime;
-
-    return newRequest;
-}
