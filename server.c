@@ -1,256 +1,241 @@
+#include <stdbool.h>
 #include "segel.h"
 #include "request.h"
 #include "Queue.h"
 
-// 
-// server.c: A very, very simple web server
-//
-// To run:
-//  ./server <portnum (above 2000)>
-//
-// Repeatedly handles HTTP requests sent to this port number.
-// Most of the work is done within routines written in request.c
-//
+#define BLOCK 1
+#define DROP_TAIL 2
+#define DROP_RANDOM 3
+#define DROP_HEAD 4
 
-//For synchronization purposes
-pthread_mutex_t m_queue;
-pthread_mutex_t m_queue_is_full;
-pthread_cond_t working_not_empty;
-pthread_cond_t queue_not_full;
+int ol_handling_type;
 
-Queue* pending_requests_queue;
-Queue* assigned_requests_queue;
-
-// HW3: Parse the new arguments too
-void getargs(int *port, int* threadsCount, int* queueSize, char* schedalg, int* maxSize, int argc, char* argv[])
+void getargs(int *port, int *threads_num, int* queue_size, char schedAlg[7], int* maxSize, int argc, char *argv[])
 {
-    if (argc < 2) {
-	fprintf(stderr, "Usage: %s <port> <threads_count> <queue_size>\n", argv[0]);
-	exit(1);
+    if (argc < 5) {
+        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+        exit(1);
     }
-    
-   
+
     *port = atoi(argv[1]);
-    *threadsCount = atoi(argv[2]);
-    *queueSize = atoi(argv[3]);
-    strcpy(schedalg, argv[4]);
-    
-    if(strcmp(schedalg, "dynamic") == 0)
+    *threads_num = atoi(argv[2]);
+    *queue_size = atoi(argv[3]);
+    strcpy(schedAlg, argv[4]);
+
+    if(strcmp(argv[4], "dynamic") == 0)
     {
-		if (argc > 5)
-		{
-			*maxSize = atoi(argv[5]);
-		}
-	}
-	
-	if (argc < 10) {
-		fprintf(stderr, "Usage: %s <port> <threads_count> <queue_size>\n", schedalg);
-	}
+        if(argc >= 6)
+        {
+            *maxSize = atoi(argv[5]);
+        }
+    }
 }
 
-void* worker_request_handler(void* args)
-{
-    int threadInitId = *((int*)args);
-    free(args);
-    
-    struct timeval entryTime;
-    Stats st = malloc(sizeof(*st));
+Queue q_waiting_req;
+Queue q_handling_req;
 
-    st->workingThreadId = threadInitId;
-    st->requestCount = 0;
-    st->workingThreadsStaticCount = 0;
-    st->workingThreadsDynamicCount = 0;
+pthread_cond_t c_wr_not_empty;
+pthread_mutex_t m_queue;
+pthread_cond_t c_queue_not_full;
+pthread_mutex_t m_queue_full;
 
+void* workerFunc(void* arg) {
+    int id = *(int*)arg;
+    free(arg);
+    Stats stats = malloc(sizeof (*stats));
 
-    while(1)
+    stats->handler_thread_id = id;
+    stats->handler_thread_req_count = 0;
+    stats->handler_thread_static_req_count = 0;
+    stats->handler_thread_dynamic_req_count = 0;
+
+    struct timeval picked;
+    while (1)
     {
         pthread_mutex_lock(&m_queue);
-
-        while(pending_requests_queue->size == 0)
+        while (q_waiting_req->size == 0)
         {
-            pthread_cond_wait(&working_not_empty, &m_queue);
+            pthread_cond_wait(&c_wr_not_empty, &m_queue);
         }
+        
 
-        Request* requestToHandle = getFirstRequest(pending_requests_queue);//getFirst(waiting_req_queue);
+        Req request_to_handle = queueGetFirstInQueue(q_waiting_req)->data; // last in list = first in queue
 
-        //Update stats
-        gettimeofday(&entryTime, NULL);
-        timersub(&entryTime, &requestToHandle->arrive, &requestToHandle->dispatch);
-        st->arrivalTime = requestToHandle->arrive;
-        st->dispachInterval = requestToHandle->dispatch;
+        queueDequeue(q_waiting_req);
 
-        Dequeue(pending_requests_queue);
+        gettimeofday(&picked,NULL);
+        timersub(&picked, &request_to_handle->arrive, &request_to_handle->dispatch);
+        stats->dispatch_interval=request_to_handle->dispatch;
+        stats->arrival_time=request_to_handle->arrive;
 
-        node* added_request_node = addToQueue(assigned_requests_queue, requestToHandle);
+
+        Node req_Node = queueEnqueue(q_handling_req, request_to_handle);
+
         pthread_mutex_unlock(&m_queue);
 
-        requestHandle(requestToHandle->confd, st);
+        struct timeval timeStartedHandling;
+        gettimeofday(&timeStartedHandling,NULL);
 
-        Close(requestToHandle->confd);
-        free(requestToHandle);
+        requestHandle(request_to_handle->confd,stats);
 
-        //Now we need to dequeue the handled request from the requests_being_handled queue
+        struct timeval timeDoneHandling;
+        gettimeofday(&timeDoneHandling,NULL);
+        struct timeval timeTook;
+        timersub(&timeDoneHandling, &timeStartedHandling, &timeTook);
+
+        Close(request_to_handle->confd);
+        free(request_to_handle);
+
         pthread_mutex_lock(&m_queue);
-        removeFromQueue(assigned_requests_queue, added_request_node);
-        pthread_cond_signal(&queue_not_full);
+        queueRemoveNode(q_handling_req, req_Node);
+
+        pthread_cond_signal(&c_queue_not_full);
         pthread_mutex_unlock(&m_queue);
     }
-
-    free(st);
+    free(stats);
 }
-
 
 int main(int argc, char *argv[])
 {
-    int listenfd, connfd, port, clientlen, threadsCount, queueSize, maxSize;
-    char schedalg[7];
-    struct timeval arrivalTime;
+    int listenfd, connfd, port, threads_num, queue_size, clientlen, maxSize;
+    bool addRequestPolicy;
+    char schedalg[8];
     struct sockaddr_in clientaddr;
+    struct timeval arrive;
 
-    getargs(&port, &threadsCount, &queueSize, schedalg, &maxSize, argc, argv);
-
-    //Creating them threads
-    pthread_t* threadsArray = (pthread_t*)malloc(sizeof(pthread_t) * threadsCount);
-	
-	
-    for(int id = 0; id < threadsCount ; id++)
-    {
-		if(threadsCount > 0)
-		{
-			fprintf(stderr, "MY GOD %d\n", threadsCount); 
-		}
-		int* id_to_pass = malloc(sizeof(int));
-		*id_to_pass = id;
-        pthread_create(&threadsArray[id], NULL, worker_request_handler, id_to_pass);
-    }
-	
-    //Initializing locks + conds
     pthread_mutex_init(&m_queue, NULL);
-    pthread_mutex_init(&m_queue_is_full, NULL);
-    pthread_cond_init(&working_not_empty, NULL);
-    pthread_cond_init(&queue_not_full, NULL);
+    pthread_cond_init(&c_wr_not_empty, NULL);
+    pthread_mutex_init(&m_queue_full, NULL);
+    pthread_cond_init(&c_queue_not_full, NULL);
 
-    //Initializing the request handling queues
-    pending_requests_queue = createQueue();
-    assigned_requests_queue = createQueue();
-	if(threadsCount > 0)
-	{
-		fprintf(stderr, "MY GOD %d\n", threadsCount); 
-	}
+    getargs(&port, &threads_num, &queue_size, schedalg, &maxSize, argc, argv);
+
+    q_waiting_req = queueCreate();
+    q_handling_req = queueCreate();
+
+    pthread_t* thread_list = (pthread_t*) malloc(threads_num * sizeof(pthread_t));
+
+    for (int i = 0; i < (int) threads_num; i++)
+    {
+        int* id_to_pass = malloc(sizeof(int));
+        *id_to_pass = i;
+        pthread_create(&thread_list[i], NULL,  workerFunc, id_to_pass);
+    }
+
     listenfd = Open_listenfd(port);
-	if(threadsCount > 0)
-	{
-		fprintf(stderr, "MY GOD %d\n", threadsCount); 
-	}
+
     while (1)
     {
+        addRequestPolicy = false;
         clientlen = sizeof(clientaddr);
-        connfd = Accept(listenfd, (SA *)&clientaddr, (socklen_t *) &clientlen);
+        connfd = Accept(listenfd, (SA *) &clientaddr, (socklen_t *) &clientlen);
+        gettimeofday(&arrive,NULL);
 
-        //In case the schedalg is random/drop head
-        gettimeofday(&arrivalTime, NULL);
-        Request* newRequest = initRequest(connfd, arrivalTime);
-        newRequest->confd = connfd;
+        if (q_waiting_req->size + q_handling_req->size >= queue_size) {
 
-        if (pending_requests_queue->size + assigned_requests_queue->size >= queueSize)
-        {
-            if(strcmp(schedalg, "block") == 0)
+            if(strcmp(schedalg,"block") == 0)
             {
-                pthread_mutex_lock(&m_queue_is_full);
+                pthread_mutex_lock(&m_queue_full);
 
-                while(pending_requests_queue->size + assigned_requests_queue->size >= queueSize)
+                while (q_waiting_req->size + q_handling_req->size >= queue_size)
                 {
-                    pthread_cond_wait(&queue_not_full, &m_queue_is_full);
+                    pthread_cond_wait(&c_queue_not_full, &m_queue_full);
                 }
 
-                pthread_mutex_unlock(&m_queue_is_full);
+                pthread_mutex_unlock(&m_queue_full);
             }
-            else if(strcmp(schedalg, "dt") == 0)
+            else if (strcmp(schedalg,"dh") == 0)
             {
-                Close(connfd);
-            }
-            else if(strcmp(schedalg, "dh") == 0)
-            {
-                if(pending_requests_queue->size > 0)
+                if(q_waiting_req->size != 0)
                 {
                     pthread_mutex_lock(&m_queue);
-                    Close(pending_requests_queue->head->data->confd);
-                    free(pending_requests_queue->head->data);
-                    removeFromQueue(pending_requests_queue, pending_requests_queue->head);
-
-                    addToQueue(pending_requests_queue, newRequest);
-                    //pthread_cond_signal(&working_not_empty);
+                    Close(q_waiting_req->first->data->confd);
+                    free(q_waiting_req->first->data);
+                    queueDequeue(q_waiting_req);
                     pthread_mutex_unlock(&m_queue);
                 }
-                else //queue size = 0 (an empty queue)
+                else
                 {
                     Close(connfd);
+                    addRequestPolicy = true;
                 }
+            }
+            else if (strcmp(schedalg, "dt") == 0)
+            {
+                Close(connfd);
+                addRequestPolicy = true;
             }
             else if(strcmp(schedalg, "bf") == 0)
             {
-                pthread_mutex_lock(&m_queue_is_full);
+                pthread_mutex_lock(&m_queue_full);
 
-                while(pending_requests_queue->size > 0 && assigned_requests_queue->size > 0)
+                while(q_waiting_req->size > 0 && q_handling_req->size > 0)
                 {
-                    pthread_cond_wait(&working_not_empty, &m_queue_is_full);
+                    pthread_cond_wait(&c_wr_not_empty, &m_queue_full);
                 }
 
-                pthread_mutex_unlock(&m_queue_is_full);
+                pthread_mutex_unlock(&m_queue_full);
                 Close(connfd);
             }
             else if(strcmp(schedalg, "dynamic") == 0)
             {
-                Close(connfd);
-                queueSize++;
-                
-                if (maxSize < queueSize)
-                {
-					maxSize = queueSize;
-				}
-                
-            }
-            else if(strcmp(schedalg, "random") == 0)
-            {
-                if(pending_requests_queue->size == 0)
+                queue_size++;
+
+                if (queue_size == maxSize) //drop tail policy
                 {
                     Close(connfd);
+                    addRequestPolicy = true;
+                }
+            }
+            else if (strcmp(schedalg, "random") == 0)
+            {
+                if(q_handling_req->size >= queue_size)
+                {
+                    Close(connfd);
+                    addRequestPolicy = true;
                 }
                 else
                 {
                     pthread_mutex_lock(&m_queue);
 
-                    int amountToDrop = (pending_requests_queue->size + 1) / 2;
+                    int amountToDrop = (q_waiting_req->size + 1) / 2;
 
                     for(int i = 0; i < amountToDrop; i++)
                     {
-                        int randIndex = rand() % pending_requests_queue->size;
-                        removeByIndex(pending_requests_queue, randIndex);
+                        int randIndex = rand() % q_waiting_req->size;
+                        queueRemoveNodeByIndex(q_waiting_req, randIndex);
                     }
 
-                    addToQueue(pending_requests_queue, newRequest);
-                    pthread_cond_signal(&working_not_empty);
                     pthread_mutex_unlock(&m_queue);
                 }
             }
+
         }
 
-        Close(connfd);
+        if (addRequestPolicy != true)
+        {
+            Req request = malloc(sizeof(*request));
+            request->confd = connfd;
+            request->arrive=arrive;
+            pthread_mutex_lock(&m_queue);
+
+            queueEnqueue(q_waiting_req, request);
+
+            pthread_cond_signal(&c_wr_not_empty);
+            pthread_mutex_unlock(&m_queue);
+        }
+
     }
 
-    destroyAndCloseDFds(assigned_requests_queue);
-    destroy(pending_requests_queue);
+    queueDestroyAndClose(q_handling_req);
+    queueDestroy(q_waiting_req);
 
-    for(int i = 0 ; i < threadsCount ; i++)
-    {
-        pthread_join(threadsArray[i], NULL);
+    for (int i = 0; i < threads_num; i++) {
+        pthread_join(thread_list[i], NULL);
     }
 
-    free(threadsArray);
+    free(thread_list);
 }
-
-
-    
 
 
  
