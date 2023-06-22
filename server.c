@@ -38,10 +38,10 @@ void* workerFunc(void* arg) {
     free(arg);
     Stats stats = malloc(sizeof (*stats));
 
-    stats->handler_thread_id = id;
-    stats->handler_thread_req_count = 0;
-    stats->handler_thread_static_req_count = 0;
-    stats->handler_thread_dynamic_req_count = 0;
+    stats->handlerId = id;
+    stats->handlerReqCount = 0;
+    stats->handlerStaticReqCount = 0;
+    stats->handlerDynamicReqCount = 0;
 
     struct timeval picked;
     while (1)
@@ -58,8 +58,8 @@ void* workerFunc(void* arg) {
 
         gettimeofday(&picked,NULL);
         timersub(&picked, &request_to_handle->arrive, &request_to_handle->dispatch);
-        stats->dispatch_interval = request_to_handle->dispatch;
-        stats->arrival_time = request_to_handle->arrive;
+        stats->dispatch = request_to_handle->dispatch;
+        stats->arrival = request_to_handle->arrive;
 
 
         node* req_Node = addToQueue(q_handling_req, request_to_handle);
@@ -69,7 +69,7 @@ void* workerFunc(void* arg) {
         struct timeval timeStartedHandling;
         gettimeofday(&timeStartedHandling,NULL);
 
-        requestHandle(request_to_handle->confd,stats);
+        requestHandle(request_to_handle->confd, stats);
 
         struct timeval timeDoneHandling;
         gettimeofday(&timeDoneHandling,NULL);
@@ -231,4 +231,3 @@ int main(int argc, char *argv[])
 }
 
 
- 
